@@ -1,0 +1,6 @@
+{
+  "name": "AB",
+  "description": "A modern, lightweight PWA verification and access management platform.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

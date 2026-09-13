@@ -1,0 +1,86 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Default-deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Common primitives
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // Alis Link validation
+    function isValidAlis(data) {
+      return data.owner is string && data.owner.size() > 0 && data.owner.size() <= 100 &&
+             data.createdAt is string && data.createdAt.size() <= 50 &&
+             data.expiresAt is string && data.expiresAt.size() <= 50 &&
+             data.status in ['active', 'used', 'expired', 'revoked'] &&
+             (!('verificationId' in data) || (data.verificationId is string && data.verificationId.size() <= 128));
+    }
+
+    // Verification Record validation
+    function isValidVerification(data) {
+      return data.status in ['VALID', 'INVALID', 'EXPIRED'] &&
+             data.createdAt is string && data.createdAt.size() <= 50 &&
+             data.expiresAt is string && data.expiresAt.size() <= 50 &&
+             data.browser is string && data.browser.size() <= 100 &&
+             data.platform is string && data.platform.size() <= 100 &&
+             data.screen is string && data.screen.size() <= 50 &&
+             data.alisId is string && data.alisId.size() <= 128 &&
+             (!('referrer' in data) || (data.referrer is string && data.referrer.size() <= 200));
+    }
+
+    // Match /alis/{alisId}
+    match /alis/{alisId} {
+      // Anyone with the link ID can read single document to verify its status and expiration
+      allow get: if isValidId(alisId);
+      // Admin can list links
+      allow list: if true;
+
+      // Creation of new alis verification links
+      allow create: if isValidId(alisId) && isValidAlis(incoming());
+
+      // Update allowed to mark as used/expired
+      allow update: if isValidId(alisId) && isValidAlis(incoming()) && (
+        incoming().diff(existing()).affectedKeys().hasOnly(['status', 'verificationId']) ||
+        incoming().diff(existing()).affectedKeys().hasOnly(['status'])
+      );
+
+      allow delete: if isSignedIn();
+    }
+
+    // Match /verifications/{verificationId}
+    match /verifications/{verificationId} {
+      // Allow single document lookup by unique ID to check access validity
+      allow get: if isValidId(verificationId);
+      // List verifications for dashboard view
+      allow list: if true;
+
+      // Create new verification result upon completing client-side human liveness check
+      allow create: if isValidId(verificationId) && isValidVerification(incoming());
+
+      // Verification records are immutable once issued
+      allow update, delete: if false;
+    }
+
+    // Match /test/{docId} for backend connection health check probe
+    match /test/{docId} {
+      allow get: if isValidId(docId);
+    }
+  }
+}

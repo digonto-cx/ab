@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f172a" />
+      <stop offset="50%" stop-color="#090d16" />
+      <stop offset="100%" stop-color="#020617" />
+    </linearGradient>
+    <linearGradient id="primaryGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38bdf8" />
+      <stop offset="50%" stop-color="#6366f1" />
+      <stop offset="100%" stop-color="#a855f7" />
+    </linearGradient>
+    <linearGradient id="glowGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38bdf8" stop-opacity="0.4" />
+      <stop offset="100%" stop-color="#6366f1" stop-opacity="0" />
+    </linearGradient>
+  </defs>
+
+  <!-- Background with subtle border -->
+  <rect width="512" height="512" rx="128" fill="url(#bgGrad)" />
+  <rect x="8" y="8" width="496" height="496" rx="120" fill="none" stroke="#1e293b" stroke-width="4" />
+
+  <!-- Soft glow circle -->
+  <circle cx="256" cy="256" r="180" fill="url(#glowGrad)" />
+
+  <!-- Shield / Verification Emblem -->
+  <path d="M256 96 L376 148 V252 C376 332 324 394 256 416 C188 394 136 332 136 252 V148 Z" 
+        fill="#0b0f19" stroke="url(#primaryGrad)" stroke-width="12" stroke-linejoin="round" />
+
+  <!-- Stylized "AB" monogram in center -->
+  <g fill="none" stroke="url(#primaryGrad)" stroke-width="16" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Letter A -->
+    <path d="M190 310 L226 200 L262 310" />
+    <path d="M202 276 L250 276" />
+    
+    <!-- Checkmark / Liveness Accent -->
+    <circle cx="256" cy="150" r="10" fill="#38bdf8" />
+    
+    <!-- Letter B -->
+    <path d="M280 200 H316 C332 200 340 212 340 226 C340 240 332 250 316 250 H280 V310 H320 C336 310 346 298 346 280 C346 262 336 250 320 250" />
+  </g>
+</svg>
