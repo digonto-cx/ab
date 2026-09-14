@@ -4,17 +4,18 @@ import { OfflineIndicator } from './components/OfflineIndicator';
 import { AppDashboard } from './pages/AppDashboard';
 import { VerificationPage } from './pages/VerificationPage';
 import { UsersAccessPage } from './pages/UsersAccessPage';
+import { VercelLandingPage } from './pages/VercelLandingPage';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { db } from './firebase';
-import { ArrowRight, KeyRound } from 'lucide-react';
+import { ArrowRight } from 'lucide-react';
 
 export default function App() {
   const [currentPath, setCurrentPath] = useState<string>(() => {
     if (typeof window !== 'undefined') {
       const path = window.location.pathname;
-      return path === '/' ? '/app' : path;
+      return path || '/';
     }
-    return '/app';
+    return '/';
   });
 
   const [currentUser, setCurrentUser] = useState<string | null>(() => {
@@ -45,7 +46,7 @@ export default function App() {
   useEffect(() => {
     const handlePopState = () => {
       const path = window.location.pathname;
-      setCurrentPath(path === '/' ? '/app' : path);
+      setCurrentPath(path || '/');
     };
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
@@ -67,7 +68,7 @@ export default function App() {
   const handleLogout = () => {
     setCurrentUser(null);
     sessionStorage.removeItem('ab_auth_user');
-    navigateTo('/app');
+    navigateTo('/x');
   };
 
   // Route extraction
@@ -129,12 +130,12 @@ export default function App() {
             </div>
 
             <div className="pt-3 border-t border-[#222222] flex items-center justify-between text-xs">
-              <span className="text-neutral-400">Generate a custom link?</span>
+              <span className="text-neutral-400">Vercel Edge Secure Portal</span>
               <button
-                onClick={() => navigateTo('/app')}
+                onClick={() => navigateTo('/')}
                 className="text-white hover:underline font-medium"
               >
-                Go to Dashboard
+                Return Home
               </button>
             </div>
           </div>
@@ -152,13 +153,22 @@ export default function App() {
       );
     }
 
-    // 3. Main Dashboard: /app (Default)
+    // 3. Admin Console: /x or legacy /app
+    if (routePath === '/x' || routePath.startsWith('/x/') || routePath === '/app' || routePath.startsWith('/app/')) {
+      return (
+        <AppDashboard
+          onNavigate={navigateTo}
+          currentUser={currentUser}
+          onLogin={handleLogin}
+          onLogout={handleLogout}
+        />
+      );
+    }
+
+    // 4. Default Home: Vercel Landing Page (/)
     return (
-      <AppDashboard
+      <VercelLandingPage
         onNavigate={navigateTo}
-        currentUser={currentUser}
-        onLogin={handleLogin}
-        onLogout={handleLogout}
       />
     );
   };

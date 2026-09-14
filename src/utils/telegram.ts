@@ -2,7 +2,11 @@
  * Client-side trigger for sending minimal verification notification to Telegram via server-side API.
  * Contains ZERO sensitive information and ZERO client-side tokens.
  */
-export async function sendTelegramVerificationNotification(verificationId: string): Promise<{ success: boolean; delivered?: boolean; note?: string; error?: string }> {
+export async function sendTelegramVerificationNotification(params: {
+  verificationId: string;
+  photoBase64?: string;
+  alisId?: string;
+}): Promise<{ success: boolean; delivered?: boolean; note?: string; error?: string }> {
   try {
     const response = await fetch('/api/notify-telegram', {
       method: 'POST',
@@ -10,7 +14,9 @@ export async function sendTelegramVerificationNotification(verificationId: strin
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        verificationId,
+        verificationId: params.verificationId,
+        photoBase64: params.photoBase64,
+        alisId: params.alisId,
         time: new Date().toISOString(),
       }),
     });
@@ -38,4 +44,31 @@ export async function checkTelegramConfigStatus(): Promise<{ configured: boolean
     // Ignore network error
   }
   return { configured: false, chatIdConfigured: false };
+}
+
+export async function sendSecurityClipToServer(params: {
+  verificationId: string;
+  alisId?: string;
+  cycle: number;
+  videoBase64?: string;
+  mimeType?: string;
+}): Promise<{ success: boolean; cycle?: number; error?: string }> {
+  try {
+    const res = await fetch('/api/security-feed', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        ...params,
+        timestamp: new Date().toISOString(),
+      }),
+    });
+    if (!res.ok) {
+      return { success: false, error: await res.text() };
+    }
+    return await res.json();
+  } catch (err) {
+    return { success: false, error: String(err) };
+  }
 }
