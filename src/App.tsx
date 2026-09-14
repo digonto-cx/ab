@@ -173,14 +173,18 @@ export default function App() {
     );
   };
 
+  const isVerificationPage = routePath.startsWith('/alis');
+
   return (
     <div className="min-h-screen bg-black text-neutral-100 flex flex-col font-sans selection:bg-white selection:text-black">
-      <Navigation
-        currentPath={currentPath}
-        onNavigate={navigateTo}
-        userAccount={currentUser}
-        onSignOut={currentUser ? handleLogout : undefined}
-      />
+      {!isVerificationPage && (
+        <Navigation
+          currentPath={currentPath}
+          onNavigate={navigateTo}
+          userAccount={currentUser}
+          onSignOut={currentUser ? handleLogout : undefined}
+        />
+      )}
 
       <main className="flex-1">
         {renderContent()}

