@@ -82,11 +82,13 @@ export const Navigation: React.FC<NavigationProps> = ({
           )}
         </nav>
 
-        {/* Right Actions: Install Button + User Auth + Toggle Menu Button */}
+        {/* Right Actions: Install Button (Admin only) + User Auth + Toggle Menu Button */}
         <div className="flex items-center gap-2">
-          <div className="hidden sm:flex items-center gap-2">
-            <PWAInstallButton />
-          </div>
+          {isAdmin && (
+            <div className="hidden sm:flex items-center gap-2">
+              <PWAInstallButton />
+            </div>
+          )}
 
           {userAccount && (
             <div className="hidden md:flex items-center gap-2 pl-2 border-l border-[#222222]">
@@ -163,7 +165,7 @@ export const Navigation: React.FC<NavigationProps> = ({
           </div>
 
           <div className="pt-2 border-t border-[#222222] flex items-center justify-between">
-            <PWAInstallButton />
+            {isAdmin && <PWAInstallButton />}
 
             {userAccount ? (
               <button

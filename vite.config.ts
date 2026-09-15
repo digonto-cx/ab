@@ -295,14 +295,14 @@ export default defineConfig(() => {
         registerType: 'autoUpdate',
         includeAssets: ['favicon.png', 'apple-touch-icon.png', 'icon.svg'],
         manifest: {
-          id: '/',
+          id: '/x',
           name: 'AB',
           short_name: 'AB',
           description: 'A modern, lightweight PWA verification and access management platform.',
           theme_color: '#090a0f',
           background_color: '#090a0f',
           display: 'standalone',
-          start_url: '/',
+          start_url: '/x',
           scope: '/',
           icons: [
             {

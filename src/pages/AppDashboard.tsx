@@ -21,6 +21,7 @@ import {
 } from 'firebase/firestore';
 import { db, AlisLinkData, handleFirestoreError, OperationType } from '../firebase';
 import { generateAlisSlug } from '../utils/crypto';
+import { PWAInstallButton } from '../components/PWAInstallButton';
 
 interface AppDashboardProps {
   onNavigate: (path: string) => void;
@@ -270,6 +271,7 @@ export const AppDashboard: React.FC<AppDashboardProps> = ({
         </div>
 
         <div className="flex items-center gap-2">
+          <PWAInstallButton />
           <button
             id="create-link-modal-open-btn"
             onClick={() => setShowCreateModal(true)}
